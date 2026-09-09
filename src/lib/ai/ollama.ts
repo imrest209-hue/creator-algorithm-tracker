@@ -15,6 +15,21 @@
 const OLLAMA_HOST = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
 const PROBE_TIMEOUT_MS = 1_500;
 const GENERATE_TIMEOUT_MS = 120_000;
+const WARM_TIMEOUT_MS = 60_000;
+
+/**
+ * SPEED: this is the single biggest lever on how fast an answer feels.
+ *
+ * Measured on this machine with llama3.2 (3.2B): searching takes ~1.1s and
+ * generating takes ~0.5s, but *loading the model* takes 5s if it was recently
+ * evicted and ~40s truly cold. Ollama's default keep_alive is 5 minutes, so
+ * asking two questions ten minutes apart means paying that load both times.
+ *
+ * Holding the model in memory for half an hour, plus preloading it when the
+ * research page opens (see warmModel), turns the common case from ~40s into
+ * about 1.5s - which is search time, not model time.
+ */
+const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? '30m';
 
 export interface OllamaStatus {
   available: boolean;
@@ -64,6 +79,28 @@ export function pickModel(models: string[]): string | null {
   return models[0];
 }
 
+/**
+ * Loads a model into memory without generating anything - an empty prompt makes
+ * Ollama do the load and return immediately.
+ *
+ * Called when the research page opens, so the model is already resident by the
+ * time the user finishes typing their question. Deliberately fire-and-forget:
+ * it must never delay the page, and a failure here just means the first answer
+ * is slower, not that anything breaks.
+ */
+export async function warmModel(model: string): Promise<boolean> {
+  const response = await fetchWithTimeout(
+    OLLAMA_HOST + '/api/generate',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: '', keep_alive: KEEP_ALIVE }),
+    },
+    WARM_TIMEOUT_MS,
+  );
+  return Boolean(response?.ok);
+}
+
 export async function generate(model: string, prompt: string): Promise<string | null> {
   const response = await fetchWithTimeout(
     OLLAMA_HOST + '/api/generate',
@@ -74,6 +111,7 @@ export async function generate(model: string, prompt: string): Promise<string | 
         model,
         prompt,
         stream: false,
+        keep_alive: KEEP_ALIVE,
         options: { temperature: 0.2, num_predict: 700 },
       }),
     },

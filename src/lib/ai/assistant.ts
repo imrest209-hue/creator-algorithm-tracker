@@ -1,5 +1,5 @@
 import { searchWeb, type SearchResult } from '@/lib/ai/search';
-import { getOllamaStatus, pickModel, generate } from '@/lib/ai/ollama';
+import { getOllamaStatus, pickModel, generate, warmModel } from '@/lib/ai/ollama';
 import { logger } from '@/lib/util/logger';
 
 /**
@@ -67,18 +67,38 @@ export async function askAssistant(question: string): Promise<AssistantAnswer> {
     return { answer: null, sources: [], engine: 'search-only', note: 'Ask a question to search the web.' };
   }
 
-  const sources = await searchWeb(trimmed);
+  // Search and model-loading are independent, so run them at the same time
+  // rather than paying for them back to back. Whichever is slower sets the
+  // floor - typically the search, once the model is already resident.
+  const searching = searchWeb(trimmed);
+  const preparing = getOllamaStatus().then((status) => {
+    const chosen = status.available ? pickModel(status.models) : null;
+    // Start the load now, in parallel with the search still in flight.
+    if (chosen) void warmModel(chosen).catch(() => undefined);
+    return chosen;
+  });
+
+  const [outcome, model] = await Promise.all([searching, preparing]);
+  const sources = outcome.results;
+
+  // Surfaced on every path below, so a partial result set is never passed off
+  // as a complete picture of what the web says.
+  const blockedNote = outcome.webSearchBlocked
+    ? 'Heads up: DuckDuckGo is currently rate-limiting this machine, so general web results ' +
+      'are missing and only other sources are shown. It usually clears on its own in a few minutes. ' +
+      'For a permanent fix, run a SearXNG instance and set SEARXNG_URL.'
+    : null;
+
   if (sources.length === 0) {
     return {
       answer: null,
       sources: [],
       engine: 'search-only',
-      note: 'No web results came back for that. Try rephrasing, or check this machine’s internet connection.',
+      note:
+        blockedNote ??
+        'No web results came back for that. Try rephrasing, or check this machine’s internet connection.',
     };
   }
-
-  const status = await getOllamaStatus();
-  const model = status.available ? pickModel(status.models) : null;
 
   if (!model) {
     return {
@@ -103,5 +123,5 @@ export async function askAssistant(question: string): Promise<AssistantAnswer> {
     };
   }
 
-  return { answer: generated, sources, engine: 'ollama:' + model, note: null };
+  return { answer: generated, sources, engine: 'ollama:' + model, note: blockedNote };
 }
