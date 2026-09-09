@@ -1,0 +1,430 @@
+// Creator Algorithm Tracker - PostgreSQL schema
+//
+// Design notes:
+//  * Raw platform counts live in `video_metrics` so a video can carry a history
+//    of metric snapshots without rewriting the video row.
+//  * `velocity_snapshots` stores measured views at fixed milestones. A missing
+//    row means "not measured" - it is never backfilled with an estimate.
+//  * Every nullable metric column means "the platform did not provide this".
+//  * Demo data never touches these tables; it is generated in-process and is
+//    kept completely separate from real account data.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Platform {
+  YOUTUBE
+  YOUTUBE_SHORTS
+  TIKTOK
+  TWITCH
+  KICK
+}
+
+/// KICK_API is intentionally absent: Kick has no public analytics API for clip
+/// performance yet, so Kick videos only ever arrive via CSV or MANUAL.
+enum DataSource {
+  DEMO
+  MANUAL
+  CSV
+  YOUTUBE_API
+  TIKTOK_API
+  TWITCH_API
+}
+
+enum AccountStatus {
+  CONNECTED
+  EXPIRED
+  ERROR
+}
+
+enum HookType {
+  QUESTION
+  CONTROVERSIAL
+  STORY
+  YOU_WONT_BELIEVE
+  IMMEDIATE_ACTION
+  PROBLEM_SOLUTION
+  CURIOSITY
+  LISTICLE
+  DIRECT_ADDRESS
+  UNKNOWN
+}
+
+enum NotificationType {
+  VIRAL_GROWTH
+  HIGH_RETENTION
+  LOW_PERFORMANCE
+  MILESTONE
+  STRONG_TOPIC
+  POSTING_OPPORTUNITY
+}
+
+enum NotificationSeverity {
+  INFO
+  GOOD
+  WARN
+}
+
+enum RecommendationKind {
+  FOLLOW_UP
+  PART_TWO
+  VARIATION
+  SIMILAR_CONCEPT
+  NEW_CONCEPT
+  FORMAT_SHIFT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  displayName  String   @map("display_name")
+  timezone     String   @default("UTC")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  sessions             Session[]
+  connectedAccounts    ConnectedAccount[]
+  videos               Video[]
+  categories           ContentCategory[]
+  competitorAccounts   CompetitorAccount[]
+  recommendations      Recommendation[]
+  notifications        Notification[]
+  notificationSettings NotificationSetting[]
+  importJobs           ImportJob[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  userAgent String?  @map("user_agent")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// OAuth connection to a platform. Platform passwords are never stored; only
+/// OAuth tokens, and those are encrypted at rest with AES-256-GCM.
+model ConnectedAccount {
+  id                    String        @id @default(cuid())
+  userId                String        @map("user_id")
+  platform              Platform
+  externalId            String        @map("external_id")
+  accountName           String        @map("account_name")
+  accessTokenEncrypted  String        @map("access_token_encrypted")
+  refreshTokenEncrypted String?       @map("refresh_token_encrypted")
+  tokenExpiresAt        DateTime?     @map("token_expires_at")
+  scopes                String[]      @default([])
+  status                AccountStatus @default(CONNECTED)
+  statusMessage         String?       @map("status_message")
+  connectedAt           DateTime      @default(now()) @map("connected_at")
+  lastSyncedAt          DateTime?     @map("last_synced_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos Video[]
+
+  @@unique([userId, platform, externalId])
+  @@index([userId])
+  @@map("connected_accounts")
+}
+
+model ContentCategory {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  slug      String
+  name      String
+  keywords  String[] @default([])
+  isCustom  Boolean  @default(false) @map("is_custom")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos Video[]
+
+  @@unique([userId, slug])
+  @@index([userId])
+  @@map("content_categories")
+}
+
+model Hook {
+  id        String   @id @default(cuid())
+  videoId   String   @unique @map("video_id")
+  text      String
+  type      HookType @default(UNKNOWN)
+  /// True when `type` came from the classifier rather than the user.
+  isAuto    Boolean  @default(true) @map("is_auto")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([type])
+  @@map("hooks")
+}
+
+model Video {
+  id              String     @id @default(cuid())
+  userId          String     @map("user_id")
+  connectedAccountId String? @map("connected_account_id")
+  platform        Platform
+  platformVideoId String     @map("platform_video_id")
+  title           String
+  caption         String?
+  description     String?
+  categoryId      String?    @map("category_id")
+  categoryAuto    Boolean    @default(true) @map("category_auto")
+  durationSeconds Int        @map("duration_seconds")
+  publishedAt     DateTime   @map("published_at")
+  thumbnailUrl    String?    @map("thumbnail_url")
+  source          DataSource @default(MANUAL)
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount ConnectedAccount? @relation(fields: [connectedAccountId], references: [id], onDelete: SetNull)
+  category         ContentCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  hook             Hook?
+  metrics          VideoMetric[]
+  snapshots        VelocitySnapshot[]
+  hashtags         VideoHashtag[]
+  scores           PerformanceScore[]
+  notifications    Notification[]
+  recommendations  Recommendation[]
+
+  @@unique([userId, platform, platformVideoId])
+  @@index([userId, publishedAt])
+  @@index([userId, platform])
+  @@index([categoryId])
+  @@map("videos")
+}
+
+/// One row per metrics capture. The newest row is the current state; older rows
+/// preserve history so growth over time can be charted.
+model VideoMetric {
+  id                        String   @id @default(cuid())
+  videoId                   String   @map("video_id")
+  capturedAt                DateTime @default(now()) @map("captured_at")
+  views                     BigInt   @default(0)
+  likes                     BigInt   @default(0)
+  comments                  BigInt   @default(0)
+  shares                    BigInt   @default(0)
+  saves                     BigInt?
+  followersGained           Int?     @map("followers_gained")
+  watchTimeMinutes          Float?   @map("watch_time_minutes")
+  averageViewDurationSeconds Float?  @map("average_view_duration_seconds")
+  averagePercentageViewed   Float?   @map("average_percentage_viewed")
+  impressions               BigInt?
+  clickThroughRate          Float?   @map("click_through_rate")
+  source                    DataSource @default(MANUAL)
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId, capturedAt])
+  @@map("video_metrics")
+}
+
+/// Measured views at a fixed number of minutes after publish. A missing row
+/// means the milestone was never measured - it is never interpolated.
+model VelocitySnapshot {
+  id                  String   @id @default(cuid())
+  videoId             String   @map("video_id")
+  minutesAfterPublish Int      @map("minutes_after_publish")
+  views               BigInt
+  likes               BigInt?
+  comments            BigInt?
+  shares              BigInt?
+  recordedAt          DateTime @default(now()) @map("recorded_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, minutesAfterPublish])
+  @@index([videoId])
+  @@map("velocity_snapshots")
+}
+
+model Hashtag {
+  id        String   @id @default(cuid())
+  tag       String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  videos VideoHashtag[]
+
+  @@map("hashtags")
+}
+
+model VideoHashtag {
+  videoId   String @map("video_id")
+  hashtagId String @map("hashtag_id")
+
+  video   Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  hashtag Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  @@id([videoId, hashtagId])
+  @@index([hashtagId])
+  @@map("video_hashtags")
+}
+
+/// Cached score output. The score is always recomputable from metrics; this
+/// table stores the breakdown so historical scores stay reproducible.
+model PerformanceScore {
+  id          String   @id @default(cuid())
+  videoId     String   @map("video_id")
+  score       Int
+  viralScore  Int?     @map("viral_score")
+  confidence  String
+  /// Full component breakdown as returned by computePerformanceScore.
+  breakdown   Json
+  reasons     String[] @default([])
+  computedAt  DateTime @default(now()) @map("computed_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId, computedAt])
+  @@map("performance_scores")
+}
+
+/// Aggregated day/hour performance, refreshed by the timing analyser.
+model PostingTime {
+  id                  String   @id @default(cuid())
+  userId              String   @map("user_id")
+  platform            Platform?
+  dayOfWeek           Int      @map("day_of_week")
+  hourOfDay           Int      @map("hour_of_day")
+  timezone            String
+  videoCount          Int      @map("video_count")
+  avgViews            Float?   @map("avg_views")
+  avgPerformanceScore Float?   @map("avg_performance_score")
+  avgEngagementRate   Float?   @map("avg_engagement_rate")
+  computedAt          DateTime @default(now()) @map("computed_at")
+
+  @@unique([userId, platform, dayOfWeek, hourOfDay, timezone])
+  @@index([userId])
+  @@map("posting_times")
+}
+
+model Recommendation {
+  id              String             @id @default(cuid())
+  userId          String             @map("user_id")
+  sourceVideoId   String?            @map("source_video_id")
+  kind            RecommendationKind
+  title           String
+  hook            String?
+  caption         String?
+  hashtags        String[]           @default([])
+  categoryName    String?            @map("category_name")
+  evidence        String
+  confidence      String
+  /// Always true - these are machine-generated drafts, never platform data.
+  isGenerated     Boolean            @default(true) @map("is_generated")
+  dismissed       Boolean            @default(false)
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceVideo Video? @relation(fields: [sourceVideoId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@map("recommendations")
+}
+
+model CompetitorAccount {
+  id          String     @id @default(cuid())
+  userId      String     @map("user_id")
+  platform    Platform
+  handle      String
+  url         String?
+  displayName String?    @map("display_name")
+  notes       String?
+  dataSource  DataSource @default(MANUAL) @map("data_source")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  lastSyncedAt DateTime? @map("last_synced_at")
+
+  user   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos CompetitorVideo[]
+
+  @@unique([userId, platform, handle])
+  @@index([userId])
+  @@map("competitor_accounts")
+}
+
+model CompetitorVideo {
+  id              String   @id @default(cuid())
+  competitorId    String   @map("competitor_id")
+  platformVideoId String   @map("platform_video_id")
+  title           String
+  url             String?
+  publishedAt     DateTime @map("published_at")
+  durationSeconds Int?     @map("duration_seconds")
+  views           BigInt?
+  likes           BigInt?
+  comments        BigInt?
+  hashtags        String[] @default([])
+  capturedAt      DateTime @default(now()) @map("captured_at")
+
+  competitor CompetitorAccount @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([competitorId, platformVideoId])
+  @@index([competitorId, publishedAt])
+  @@map("competitor_videos")
+}
+
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String               @map("user_id")
+  videoId   String?              @map("video_id")
+  type      NotificationType
+  severity  NotificationSeverity @default(INFO)
+  title     String
+  body      String
+  read      Boolean              @default(false)
+  createdAt DateTime             @default(now()) @map("created_at")
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video? @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model NotificationSetting {
+  id      String           @id @default(cuid())
+  userId  String           @map("user_id")
+  type    NotificationType
+  enabled Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("notification_settings")
+}
+
+model ImportJob {
+  id           String     @id @default(cuid())
+  userId       String     @map("user_id")
+  filename     String
+  platform     Platform?
+  rowsTotal    Int        @map("rows_total")
+  rowsImported Int        @map("rows_imported")
+  rowsSkipped  Int        @map("rows_skipped")
+  errors       Json?
+  source       DataSource @default(CSV)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("import_jobs")
+}
