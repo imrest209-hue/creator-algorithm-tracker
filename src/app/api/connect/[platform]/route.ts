@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { getIntegration, callbackUrl, requestOrigin } from '@/lib/integrations/registry';
 import { oauthStateCookieName, pkceVerifierCookieName } from '@/lib/integrations/oauth-state';
 import { randomToken, pkceCodeChallenge } from '@/lib/auth/crypto';
+import { buildYoutubeUploadAuthorizationUrl } from '@/lib/integrations/youtube';
 import type { Platform } from '@/lib/types';
 
 /**
@@ -60,6 +61,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   const redirectUri = callbackUrl(platform, requestOrigin(request));
-  const authorizationUrl = integration.buildAuthorizationUrl(state, redirectUri, codeChallenge);
+  // Studio's "Publish to YouTube" needs one extra scope beyond the default
+  // read-only connection - requested only via this explicit query param, so
+  // every other connect keeps asking for just the base scopes.
+  const wantsUploadScope = platform === 'YOUTUBE' && request.nextUrl.searchParams.get('scope') === 'upload';
+  const authorizationUrl = wantsUploadScope
+    ? buildYoutubeUploadAuthorizationUrl(state, redirectUri)
+    : integration.buildAuthorizationUrl(state, redirectUri, codeChallenge);
   return NextResponse.redirect(authorizationUrl);
 }

@@ -52,32 +52,46 @@ export function syncConnectedAccount(account: ConnectedAccount) {
   return work;
 }
 
+/**
+ * Decrypts an account's stored tokens and refreshes them first if they're
+ * about to expire, persisting the rotated credentials before returning -
+ * shared by the read-only sync path and Studio's publish job runner so both
+ * follow the exact same "refresh before use, save before proceeding" order.
+ */
+export async function resolveAccountTokens(
+  account: ConnectedAccount,
+  integration: PlatformIntegration,
+): Promise<OAuthTokens> {
+  let tokens: OAuthTokens = {
+    accessToken: decryptSecret(account.accessTokenEncrypted),
+    refreshToken: account.refreshTokenEncrypted ? decryptSecret(account.refreshTokenEncrypted) : null,
+    expiresAt: account.tokenExpiresAt,
+    scopes: account.scopes,
+  };
+  if (tokens.expiresAt && tokens.expiresAt.getTime() <= Date.now() + 60_000) {
+    if (!tokens.refreshToken) throw new ApiError('Reconnect this account.', 401, 'AUTH');
+    const refreshed = await integration.refresh(tokens.refreshToken);
+    tokens = { ...refreshed, refreshToken: refreshed.refreshToken ?? tokens.refreshToken };
+    // Save rotated credentials before the caller uses them so a later failure cannot lose them.
+    await prisma.connectedAccount.update({
+      where: { id: account.id },
+      data: {
+        accessTokenEncrypted: encryptSecret(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : null,
+        tokenExpiresAt: tokens.expiresAt,
+        scopes: tokens.scopes,
+      },
+    });
+  }
+  return tokens;
+}
+
 async function runSync(account: ConnectedAccount) {
   const integration = getIntegration(account.platform);
   if (!integration || !integration.isConfigured()) throw new Error('This integration is not configured.');
   let tokens: OAuthTokens;
   try {
-    tokens = {
-      accessToken: decryptSecret(account.accessTokenEncrypted),
-      refreshToken: account.refreshTokenEncrypted ? decryptSecret(account.refreshTokenEncrypted) : null,
-      expiresAt: account.tokenExpiresAt,
-      scopes: account.scopes,
-    };
-    if (tokens.expiresAt && tokens.expiresAt.getTime() <= Date.now() + 60_000) {
-      if (!tokens.refreshToken) throw new ApiError('Reconnect this account.', 401, 'AUTH');
-      const refreshed = await integration.refresh(tokens.refreshToken);
-      tokens = { ...refreshed, refreshToken: refreshed.refreshToken ?? tokens.refreshToken };
-      // Save rotated credentials before fetching videos so a later fetch failure cannot lose them.
-      await prisma.connectedAccount.update({
-        where: { id: account.id },
-        data: {
-          accessTokenEncrypted: encryptSecret(tokens.accessToken),
-          refreshTokenEncrypted: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : null,
-          tokenExpiresAt: tokens.expiresAt,
-          scopes: tokens.scopes,
-        },
-      });
-    }
+    tokens = await resolveAccountTokens(account, integration);
   } catch (error) {
     await recordSyncFailure(account.id, error);
     throw error;

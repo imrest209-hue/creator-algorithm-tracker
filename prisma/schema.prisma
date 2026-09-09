@@ -35,6 +35,9 @@ enum DataSource {
   YOUTUBE_API
   TIKTOK_API
   TWITCH_API
+  /// Published through this app's own Studio (Publish to YouTube), not pulled
+  /// from an already-existing upload via the sync path.
+  YOUTUBE_UPLOAD
 }
 
 enum AccountStatus {
@@ -98,6 +101,8 @@ model User {
   notifications        Notification[]
   notificationSettings NotificationSetting[]
   importJobs           ImportJob[]
+  thumbnailAssets      ThumbnailAsset[]
+  publishJobs          PublishJob[]
 
   @@map("users")
 }
@@ -134,8 +139,9 @@ model ConnectedAccount {
   connectedAt           DateTime      @default(now()) @map("connected_at")
   lastSyncedAt          DateTime?     @map("last_synced_at")
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  videos Video[]
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos      Video[]
+  publishJobs PublishJob[]
 
   @@unique([userId, platform, externalId])
   @@index([userId])
@@ -427,4 +433,66 @@ model ImportJob {
 
   @@index([userId, createdAt])
   @@map("import_jobs")
+}
+
+/// A PNG exported from the in-app thumbnail editor (Studio). The file itself
+/// lives on local disk under .runtime/uploads/thumbnails/ - this row is the
+/// pointer plus enough metadata to render a picker grid.
+model ThumbnailAsset {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  filePath      String   @map("file_path")
+  width         Int
+  height        Int
+  /// Set when this thumbnail was exported while editing an existing video's
+  /// thumbnail, purely informational (no FK - the source video may be deleted).
+  sourceVideoId String?  @map("source_video_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("thumbnail_assets")
+}
+
+/// State machine for a single "Publish to YouTube" attempt. Persisted (not an
+/// in-memory map like sync.ts's activeSyncs) because an upload can run for
+/// minutes and this app's dev server gets restarted between sessions - a
+/// persisted bytesUploaded/resumableSessionUri means progress survives that.
+enum PublishJobStatus {
+  PENDING
+  UPLOADING_VIDEO
+  SETTING_THUMBNAIL
+  SAVING
+  DONE
+  FAILED
+}
+
+model PublishJob {
+  id                  String           @id @default(cuid())
+  userId              String           @map("user_id")
+  connectedAccountId  String           @map("connected_account_id")
+  status              PublishJobStatus @default(PENDING)
+  videoFilePath       String           @map("video_file_path")
+  thumbnailAssetId    String?          @map("thumbnail_asset_id")
+  title               String
+  description         String?
+  /// YouTube's own videoCategoryId (Data API) - unrelated to this app's
+  /// ContentCategory model. Defaults to "20" = Gaming.
+  categoryId          String           @default("20") @map("category_id")
+  privacy             String           @default("private")
+  totalBytes          BigInt           @map("total_bytes")
+  bytesUploaded       BigInt           @default(0) @map("bytes_uploaded")
+  resumableSessionUri String?          @map("resumable_session_uri")
+  /// The platformVideoId YouTube assigns once the upload completes.
+  resultVideoId       String?          @map("result_video_id")
+  errorMessage        String?          @map("error_message")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("publish_jobs")
 }

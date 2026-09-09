@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/layout/Shell';
 import { Alert, Badge, Card, EmptyState, SectionHeading } from '@/components/ui/primitives';
 import { PlatformBadge } from '@/components/ui/metrics';
 import { SyncButton } from '@/components/settings/SyncButton';
+import { SyncAllButton } from '@/components/settings/SyncAllButton';
 import { DisconnectButton } from '@/components/settings/DisconnectButton';
 import { NotificationToggle } from '@/components/settings/NotificationToggle';
 
@@ -64,6 +65,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         <SectionHeading
           title="Connected accounts"
           description="OAuth only. Platform passwords are never requested or stored."
+          action={
+            !viewer.isDemo && viewer.dataset.connectedAccounts.length > 1 ? (
+              <SyncAllButton accountIds={viewer.dataset.connectedAccounts.map((a) => a.id)} />
+            ) : undefined
+          }
         />
         {!isDatabaseConfigured() ? (
           <Alert tone="warn">

@@ -129,7 +129,15 @@ export interface VideoRecord {
 // KICK_API is intentionally absent: Kick has no public analytics API for clip
 // performance yet, so Kick data only ever arrives via CSV or manual entry -
 // see src/lib/integrations/kick.ts for the honest status this reports in Settings.
-export const DATA_SOURCES = ['DEMO', 'MANUAL', 'CSV', 'YOUTUBE_API', 'TIKTOK_API', 'TWITCH_API'] as const;
+export const DATA_SOURCES = [
+  'DEMO',
+  'MANUAL',
+  'CSV',
+  'YOUTUBE_API',
+  'TIKTOK_API',
+  'TWITCH_API',
+  'YOUTUBE_UPLOAD',
+] as const;
 export type DataSource = (typeof DATA_SOURCES)[number];
 
 export const DATA_SOURCE_LABELS: Record<DataSource, string> = {
@@ -139,6 +147,7 @@ export const DATA_SOURCE_LABELS: Record<DataSource, string> = {
   YOUTUBE_API: 'YouTube API',
   TIKTOK_API: 'TikTok API',
   TWITCH_API: 'Twitch API',
+  YOUTUBE_UPLOAD: 'Published from Studio',
 };
 
 export interface ContentCategory {

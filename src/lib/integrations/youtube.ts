@@ -32,11 +32,27 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const DATA_API = 'https://www.googleapis.com/youtube/v3';
 const ANALYTICS_API = 'https://youtubeanalytics.googleapis.com/v2/reports';
+const UPLOAD_API = 'https://www.googleapis.com/upload/youtube/v3';
 
 export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
   'https://www.googleapis.com/auth/yt-analytics.readonly',
 ];
+
+/**
+ * Publishing (Studio's "Publish to YouTube") needs this in addition to
+ * YOUTUBE_SCOPES - deliberately NOT added to the default scope list, since
+ * that would force every connection through a broader consent screen even
+ * for read-only-sync-only users. `buildAuthorizationUrl` accepts an
+ * `extraScopes` param so only the publish-connect flow requests it; Google's
+ * `include_granted_scopes: true` (already set below) means reconnecting adds
+ * this without dropping the existing read-only scopes.
+ */
+export const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
+
+export function hasUploadScope(scopes: string[]): boolean {
+  return scopes.includes(YOUTUBE_UPLOAD_SCOPE);
+}
 
 /** YouTube counts anything <= 3 minutes with a vertical aspect as a Short. */
 const SHORTS_MAX_SECONDS = 180;
@@ -193,6 +209,28 @@ function numOrNull(value: string | number | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function buildYoutubeAuthUrl(state: string, redirectUri: string, scopes: string[]): string {
+  const clientId = env('YOUTUBE_CLIENT_ID');
+  if (!clientId) throw new Error('YOUTUBE_CLIENT_ID is not configured.');
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: scopes.join(' '),
+    access_type: 'offline',
+    include_granted_scopes: 'true',
+    // "consent" guarantees a refresh token on re-authorisation.
+    prompt: 'consent',
+    state,
+  });
+  return AUTH_ENDPOINT + '?' + params.toString();
+}
+
+/** Used by the connect route's `?scope=upload` variant (see registry.ts / [platform]/route.ts). */
+export function buildYoutubeUploadAuthorizationUrl(state: string, redirectUri: string): string {
+  return buildYoutubeAuthUrl(state, redirectUri, [...YOUTUBE_SCOPES, YOUTUBE_UPLOAD_SCOPE]);
+}
+
 export const youtubeIntegration: PlatformIntegration = {
   platform: 'YOUTUBE',
   label: 'YouTube',
@@ -203,20 +241,7 @@ export const youtubeIntegration: PlatformIntegration = {
   },
 
   buildAuthorizationUrl(state, redirectUri) {
-    const clientId = env('YOUTUBE_CLIENT_ID');
-    if (!clientId) throw new Error('YOUTUBE_CLIENT_ID is not configured.');
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: YOUTUBE_SCOPES.join(' '),
-      access_type: 'offline',
-      include_granted_scopes: 'true',
-      // "consent" guarantees a refresh token on re-authorisation.
-      prompt: 'consent',
-      state,
-    });
-    return AUTH_ENDPOINT + '?' + params.toString();
+    return buildYoutubeAuthUrl(state, redirectUri, YOUTUBE_SCOPES);
   },
 
   async exchangeCode(code, redirectUri) {
@@ -387,3 +412,169 @@ export const youtubeIntegration: PlatformIntegration = {
     'Shorts are detected by duration (3 minutes or less) because the API has no explicit Shorts flag.',
   ],
 };
+
+/**
+ * PUBLISHING (Studio "Publish to YouTube")
+ * ---------------------------------------------------------------------------
+ * Deliberately standalone, not part of `PlatformIntegration` - publishing is
+ * a stateful, multi-step, platform-specific operation (resumable sessions,
+ * chunked binary PUTs) that doesn't fit that interface's "one call in, one
+ * SyncResult out" shape, and a future TikTok posting integration will have
+ * entirely different mechanics. `fetchJson` isn't used here either: it
+ * assumes JSON in/out, and these calls send/receive binary bodies and need
+ * to read response headers (Location, Range) that fetchJson discards.
+ */
+
+export interface PublishMetadata {
+  title: string;
+  description?: string;
+  categoryId: string;
+  privacyStatus: 'private' | 'unlisted' | 'public';
+}
+
+function classifyUploadError(status: number, bodyText: string): ApiError['kind'] {
+  if (status === 401) return 'AUTH';
+  if (status === 429) return 'RATE_LIMIT';
+  if (status === 403) return /quota|rateLimitExceeded|userRateLimitExceeded/i.test(bodyText) ? 'QUOTA' : 'AUTH';
+  if (status === 404) return 'NOT_FOUND';
+  if (status >= 500) return 'SERVER';
+  return 'CLIENT';
+}
+
+async function throwForFailedUploadResponse(response: Response, label: string): Promise<never> {
+  const text = await response.text().catch(() => '');
+  const kind = classifyUploadError(response.status, text);
+  logger.warn('integration.http_error', { label, status: response.status, kind });
+  throw new ApiError(label + ' failed with HTTP ' + response.status, response.status, kind, null, text.slice(0, 500));
+}
+
+/**
+ * Starts a resumable upload session and returns its session URI (from the
+ * `Location` response header). The actual video bytes are sent afterward via
+ * `uploadVideoChunk`.
+ */
+export async function initiateResumableUpload(
+  tokens: OAuthTokens,
+  metadata: PublishMetadata,
+  fileSizeBytes: number,
+  mimeType: string,
+): Promise<string> {
+  const response = await fetch(
+    UPLOAD_API + '/videos?uploadType=resumable&part=snippet,status',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + tokens.accessToken,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': mimeType,
+        'X-Upload-Content-Length': String(fileSizeBytes),
+      },
+      body: JSON.stringify({
+        snippet: {
+          title: metadata.title,
+          description: metadata.description ?? '',
+          categoryId: metadata.categoryId,
+        },
+        status: { privacyStatus: metadata.privacyStatus },
+      }),
+    },
+  );
+  if (!response.ok) await throwForFailedUploadResponse(response, 'YouTube resumable upload start');
+  const location = response.headers.get('location');
+  if (!location) {
+    throw new ApiError('YouTube did not return a resumable upload session.', 502, 'SERVER');
+  }
+  return location;
+}
+
+/** Parses YouTube's "Range: bytes=0-8388607" response header into the next byte offset to send. */
+export function parseNextByteFromRangeHeader(rangeHeader: string | null): number {
+  if (!rangeHeader) return 0;
+  const match = /bytes=0-(\d+)/.exec(rangeHeader);
+  return match ? Number(match[1]) + 1 : 0;
+}
+
+/** Builds a `Content-Range: bytes start-end/total` header value for one chunk PUT. */
+export function buildContentRangeHeader(rangeStart: number, chunkLength: number, totalBytes: number): string {
+  const rangeEnd = rangeStart + chunkLength - 1;
+  return 'bytes ' + rangeStart + '-' + rangeEnd + '/' + totalBytes;
+}
+
+export interface UploadChunkResult {
+  done: boolean;
+  nextByte: number;
+  /** Set once `done` is true - the new video's id. */
+  videoId?: string;
+}
+
+/**
+ * PUTs one chunk of the video file. YouTube replies `308 Resume Incomplete`
+ * (not an error - no Location header, so fetch's default redirect-follow
+ * behaviour has nothing to follow) for every chunk except the last, which
+ * gets a normal 200/201 with the created video's id in the JSON body.
+ */
+export async function uploadVideoChunk(
+  sessionUri: string,
+  chunk: Buffer,
+  rangeStart: number,
+  totalBytes: number,
+): Promise<UploadChunkResult> {
+  const response = await fetch(sessionUri, {
+    method: 'PUT',
+    headers: {
+      'Content-Length': String(chunk.length),
+      'Content-Range': buildContentRangeHeader(rangeStart, chunk.length, totalBytes),
+    },
+    body: new Uint8Array(chunk),
+  });
+
+  if (response.status === 308) {
+    return { done: false, nextByte: parseNextByteFromRangeHeader(response.headers.get('range')) };
+  }
+  if (!response.ok) await throwForFailedUploadResponse(response, 'YouTube video chunk upload');
+
+  const data = (await response.json().catch(() => ({}))) as { id?: string };
+  if (!data.id) {
+    throw new ApiError('YouTube finished the upload but did not return a video id.', 502, 'SERVER');
+  }
+  return { done: true, nextByte: totalBytes, videoId: data.id };
+}
+
+/**
+ * Queries how many bytes YouTube has actually received for a session, so an
+ * interrupted upload (e.g. a dev-server restart mid-upload) can resume from
+ * the right offset instead of restarting from zero.
+ */
+export async function queryResumableUploadStatus(
+  sessionUri: string,
+  totalBytes: number,
+): Promise<{ bytesReceived: number; done: boolean }> {
+  const response = await fetch(sessionUri, {
+    method: 'PUT',
+    headers: { 'Content-Length': '0', 'Content-Range': 'bytes */' + totalBytes },
+  });
+  if (response.status === 308) {
+    return { bytesReceived: parseNextByteFromRangeHeader(response.headers.get('range')), done: false };
+  }
+  if (response.ok) return { bytesReceived: totalBytes, done: true };
+  await throwForFailedUploadResponse(response, 'YouTube resumable upload status check');
+  throw new ApiError('Unreachable', 500, 'SERVER');
+}
+
+/**
+ * Sets a video's custom thumbnail. Per Google's docs the `youtube.upload`
+ * scope covers this for videos the uploading channel owns - verified
+ * empirically against this app's own real upload during implementation.
+ */
+export async function setThumbnail(tokens: OAuthTokens, videoId: string, thumbnailPng: Buffer): Promise<void> {
+  const response = await fetch(UPLOAD_API + '/thumbnails/set?videoId=' + encodeURIComponent(videoId), {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + tokens.accessToken,
+      'Content-Type': 'image/png',
+      'Content-Length': String(thumbnailPng.length),
+    },
+    body: new Uint8Array(thumbnailPng),
+  });
+  if (!response.ok) await throwForFailedUploadResponse(response, 'YouTube set thumbnail');
+}

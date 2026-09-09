@@ -53,6 +53,10 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    title: 'Create',
+    items: [{ href: '/studio', label: 'Studio', icon: '🎨' }],
+  },
+  {
     title: 'Data',
     items: [
       { href: '/import', label: 'CSV import', icon: '⇪' },
