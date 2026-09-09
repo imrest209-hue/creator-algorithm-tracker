@@ -97,11 +97,12 @@ export default async function StudioPage() {
             cta="Publish a video"
           />
           <StudioCard
-            icon={<IconFilm className="text-ink-muted" width={22} height={22} />}
-            tint="bg-base-700"
-            title="Video editor"
-            description="Trim, caption, and crop clips before publishing."
-            comingSoon
+            href="/studio/clips"
+            icon={<IconFilm className="text-warn" width={22} height={22} />}
+            tint="bg-warn/15"
+            title="Clip editor"
+            description="Trim a gameplay clip, reframe it for Shorts, burn in captions, adjust audio - then send it straight to publish."
+            cta="Edit a clip"
           />
           <StudioCard
             icon={<IconSparkles className="text-ink-muted" width={22} height={22} />}

@@ -88,9 +88,12 @@ function probeVideo(file: File): Promise<VideoProbe | null> {
 export function PublishWizard({
   connectedAccountId,
   timingHint,
+  incomingClip = null,
 }: {
   connectedAccountId: string;
   timingHint: string | null;
+  /** Set when arriving from the clip editor - publishes the rendered file directly. */
+  incomingClip?: { jobId: string; sourceName: string } | null;
 }) {
   const [stage, setStage] = useState<Stage>('form');
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +146,7 @@ export function PublishWizard({
     setError(null);
     const form = new FormData(event.currentTarget);
     const file = selectedFile;
-    if (!file) {
+    if (!file && !incomingClip) {
       setError('Choose a video file to publish.');
       return;
     }
@@ -155,25 +158,51 @@ export function PublishWizard({
 
     setStage('staging');
     try {
-      const params = new URLSearchParams({
-        connectedAccountId,
-        title: trimmedTitle,
-        description: String(form.get('description') ?? ''),
-        categoryId: String(form.get('categoryId') ?? '20'),
-        privacy: String(form.get('privacy') ?? 'private'),
-        filename: file.name,
-      });
-      if (thumbnailAssetId) params.set('thumbnailAssetId', thumbnailAssetId);
+      let uploadData: { jobId?: string; error?: string };
 
-      const uploadResponse = await fetch('/api/publish/upload-video?' + params.toString(), {
-        method: 'POST',
-        body: file,
-      });
-      const uploadData = await uploadResponse.json();
-      if (!uploadResponse.ok) {
-        setError(uploadData.error ?? 'Could not stage the video file.');
-        setStage('error');
-        return;
+      if (incomingClip) {
+        // Already rendered and sitting on disk - the server copies it into the
+        // publish staging area rather than making the browser re-upload it.
+        const response = await fetch('/api/publish/from-clip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clipJobId: incomingClip.jobId,
+            connectedAccountId,
+            title: trimmedTitle,
+            description: String(form.get('description') ?? ''),
+            categoryId: String(form.get('categoryId') ?? '20'),
+            privacy: String(form.get('privacy') ?? 'private'),
+            thumbnailAssetId: thumbnailAssetId ?? undefined,
+          }),
+        });
+        uploadData = await response.json();
+        if (!response.ok) {
+          setError(uploadData.error ?? 'Could not stage that clip.');
+          setStage('error');
+          return;
+        }
+      } else {
+        const params = new URLSearchParams({
+          connectedAccountId,
+          title: trimmedTitle,
+          description: String(form.get('description') ?? ''),
+          categoryId: String(form.get('categoryId') ?? '20'),
+          privacy: String(form.get('privacy') ?? 'private'),
+          filename: file!.name,
+        });
+        if (thumbnailAssetId) params.set('thumbnailAssetId', thumbnailAssetId);
+
+        const uploadResponse = await fetch('/api/publish/upload-video?' + params.toString(), {
+          method: 'POST',
+          body: file!,
+        });
+        uploadData = await uploadResponse.json();
+        if (!uploadResponse.ok) {
+          setError(uploadData.error ?? 'Could not stage the video file.');
+          setStage('error');
+          return;
+        }
       }
 
       const startResponse = await fetch('/api/publish/' + uploadData.jobId + '/start', { method: 'POST' });
@@ -185,7 +214,7 @@ export function PublishWizard({
       }
 
       setStage('uploading');
-      pollJob(uploadData.jobId);
+      if (uploadData.jobId) pollJob(uploadData.jobId);
     } catch {
       setError('Could not reach the server. Try again.');
       setStage('error');
@@ -318,7 +347,20 @@ export function PublishWizard({
         <form className="space-y-4" onSubmit={onSubmit}>
           <div>
             <label className="label mb-1 block">Video file</label>
-            {selectedFile ? (
+            {incomingClip ? (
+              <div className="flex items-center gap-3 rounded-lg border border-brand-500/40 bg-brand-500/[0.06] p-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 text-brand-300">
+                  <IconVideo width={18} height={18} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">{incomingClip.sourceName}</p>
+                  <p className="text-xs text-ink-muted">Rendered in the clip editor · publishes without re-uploading</p>
+                </div>
+                <a href="/studio/clips" className="link shrink-0 text-xs">
+                  Edit again
+                </a>
+              </div>
+            ) : selectedFile ? (
               <div className="flex items-center gap-3 rounded-lg border border-base-700 bg-base-900 p-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 text-brand-300">
                   <IconVideo width={18} height={18} />

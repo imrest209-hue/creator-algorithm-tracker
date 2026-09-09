@@ -33,6 +33,15 @@ export function videoPath(userId: string, jobId: string, ext: string): string {
   return path.join(videoDir(userId), jobId + '.' + safeExt);
 }
 
+export function clipSourcePath(userId: string, jobId: string, ext: string): string {
+  const safeExt = ext.replace(/[^a-z0-9]/gi, '').slice(0, 10) || 'mp4';
+  return path.join(RUNTIME_ROOT, 'clips', userId, jobId + '-source.' + safeExt);
+}
+
+export function clipOutputPath(userId: string, jobId: string): string {
+  return path.join(RUNTIME_ROOT, 'clips', userId, jobId + '-edit.mp4');
+}
+
 /** Ensures the parent directory of `filePath` exists before it's written to. */
 export async function ensureDirFor(filePath: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });

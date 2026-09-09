@@ -103,6 +103,8 @@ model User {
   importJobs           ImportJob[]
   thumbnailAssets      ThumbnailAsset[]
   publishJobs          PublishJob[]
+  clipJobs             ClipJob[]
+  researchQueries      ResearchQuery[]
 
   @@map("users")
 }
@@ -495,4 +497,65 @@ model PublishJob {
 
   @@index([userId, createdAt])
   @@map("publish_jobs")
+}
+
+/// One FFmpeg render of a source clip (trim/crop/overlay/audio). Same
+/// persisted-job shape as PublishJob and for the same reason: a render can
+/// run for minutes and must survive a dev-server restart.
+enum ClipJobStatus {
+  DRAFT
+  RENDERING
+  DONE
+  FAILED
+}
+
+model ClipJob {
+  id             String        @id @default(cuid())
+  userId         String        @map("user_id")
+  status         ClipJobStatus @default(DRAFT)
+  /// Uploaded source file on local disk (.runtime/uploads/clips/source/).
+  sourceFilePath String        @map("source_file_path")
+  sourceName     String        @map("source_name")
+  /// Rendered output, set once status reaches DONE.
+  outputFilePath String?       @map("output_file_path")
+  /// Probed from the source with ffprobe; null until probing succeeds.
+  durationSeconds Float?       @map("duration_seconds")
+  width          Int?
+  height         Int?
+  /// The full edit definition (trim in/out, crop preset, overlays, audio) as
+  /// submitted by the editor. Stored verbatim so a render is reproducible and
+  /// a failed job can be retried without re-entering everything.
+  editSpec       Json          @map("edit_spec")
+  /// 0-100, written by the FFmpeg progress parser as the render advances.
+  progress       Int           @default(0)
+  errorMessage   String?       @map("error_message")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("clip_jobs")
+}
+
+/// A question asked of the research assistant, with the web sources it used.
+/// Stored so answers are reviewable later and so it is always visible which
+/// results an answer was actually based on - the assistant never contributes
+/// numbers to the analytics tables, it only ever reads the open web.
+model ResearchQuery {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  question  String
+  answer    String?
+  /// [{title, url, snippet}] exactly as returned by the search layer.
+  sources   Json     @default("[]")
+  /// Which backend produced `answer`: "ollama:<model>" or "search-only".
+  engine    String
+  errorMessage String? @map("error_message")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("research_queries")
 }

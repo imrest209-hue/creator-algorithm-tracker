@@ -29,8 +29,12 @@ const STATUS_LABEL: Record<string, string> = {
   FAILED: 'Failed',
 };
 
-export default async function PublishPage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function PublishPage({ searchParams }: { searchParams: SearchParams }) {
   const viewer = await getViewer();
+  const params = await searchParams;
+  const clipJobIdParam = Array.isArray(params.clipJobId) ? params.clipJobId[0] : params.clipJobId;
 
   const youtubeAccounts = viewer.dataset.connectedAccounts.filter(
     (account) => account.platform === 'YOUTUBE' && account.status === 'CONNECTED',
@@ -51,6 +55,16 @@ export default async function PublishPage() {
           take: 5,
         })
       : [];
+
+  // Arriving from the clip editor's "Send to Publish" - skips the file picker
+  // and publishes the already-rendered clip straight from disk.
+  const incomingClip =
+    viewer.user && clipJobIdParam && isDatabaseConfigured()
+      ? await prisma.clipJob.findFirst({
+          where: { id: clipJobIdParam, userId: viewer.user.id, status: 'DONE' },
+          select: { id: true, sourceName: true, editSpec: true },
+        })
+      : null;
 
   return (
     <>
@@ -86,7 +100,13 @@ export default async function PublishPage() {
           .
         </Alert>
       ) : (
-        <PublishWizard connectedAccountId={publishableAccount.id} timingHint={timingHint} />
+        <PublishWizard
+          connectedAccountId={publishableAccount.id}
+          timingHint={timingHint}
+          incomingClip={
+            incomingClip ? { jobId: incomingClip.id, sourceName: incomingClip.sourceName } : null
+          }
+        />
       )}
 
       {recentJobs.length > 0 ? (

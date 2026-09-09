@@ -48,6 +48,7 @@ const NAV: NavGroup[] = [
     title: 'Plan',
     items: [
       { href: '/ideas', label: 'Ideas & analyst', icon: '✦' },
+      { href: '/research', label: 'Research', icon: '🔎' },
       { href: '/competitors', label: 'Reference creators', icon: '◈' },
       { href: '/notifications', label: 'Notifications', icon: '🔔' },
     ],
