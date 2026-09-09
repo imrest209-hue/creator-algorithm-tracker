@@ -52,7 +52,7 @@ export default async function EngagementPage({ searchParams }: { searchParams: S
         <StatCard
           label="Shares"
           value={formatCompact(breakdown.totalShares)}
-          hint="YouTube does not expose per-video share counts; those videos contribute 0."
+          hint="Shares reported by connected platforms or imported data. Some APIs do not provide this count."
         />
         <StatCard
           label="Saves"

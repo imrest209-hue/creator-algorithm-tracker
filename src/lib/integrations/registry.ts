@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 import type { Platform } from '@/lib/types';
 import type { PlatformIntegration } from '@/lib/integrations/types';
 import { youtubeIntegration } from '@/lib/integrations/youtube';
@@ -65,4 +66,24 @@ export function callbackUrl(platform: Platform, origin?: string): string {
   const base = origin ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const slug = CALLBACK_SLUGS[platform] ?? 'youtube';
   return base.replace(/\/$/, '') + '/api/connect/' + slug + '/callback';
+}
+
+/**
+ * The public-facing origin for this request.
+ *
+ * `request.nextUrl.origin` reflects the address the Next.js dev server is
+ * bound to (e.g. `http://localhost:3000`), not the address the browser
+ * actually used to reach it - so a request proxied through a tunnel (ngrok,
+ * Cloudflare Tunnel, a reverse proxy in production) produces the wrong
+ * origin and breaks OAuth redirect_uri matching. Prefer the standard
+ * forwarded headers when present; they're only trusted for building a
+ * redirect target, never for auth decisions.
+ */
+export function requestOrigin(request: NextRequest): string {
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  if (forwardedHost) {
+    const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+    return (forwardedProto || 'https') + '://' + forwardedHost;
+  }
+  return request.nextUrl.origin;
 }

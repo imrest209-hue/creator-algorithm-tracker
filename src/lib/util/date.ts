@@ -32,10 +32,11 @@ export const RANGE_PRESET_LABELS: Record<RangePreset, string> = {
 export function resolveRange(filter: FilterState, now = new Date()): DateRange {
   const to = new Date(now.getTime());
   if (filter.preset === 'custom') {
-    const from = filter.from ? new Date(filter.from) : new Date(0);
-    const customTo = filter.to ? new Date(filter.to) : to;
+    const from = filter.from && Number.isFinite(Date.parse(filter.from)) ? new Date(filter.from) : new Date(0);
+    const customTo = filter.to && Number.isFinite(Date.parse(filter.to)) ? new Date(filter.to) : new Date(to);
     // Date-only "to" values are inclusive of the whole day the user picked.
-    if (filter.to && filter.to.length <= 10) customTo.setUTCHours(23, 59, 59, 999);
+    if (filter.to && /^\d{4}-\d{2}-\d{2}$/.test(filter.to) && Number.isFinite(Date.parse(filter.to))) customTo.setUTCDate(customTo.getUTCDate() + 1);
+    if (from > customTo) return { from: customTo.toISOString(), to: from.toISOString() };
     return { from: from.toISOString(), to: customTo.toISOString() };
   }
   if (filter.preset === 'all') {

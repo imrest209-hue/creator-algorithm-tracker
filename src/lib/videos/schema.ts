@@ -16,7 +16,8 @@ export const manualVideoSchema = z.object({
   categoryName: z.string().trim().max(60).optional(),
   hookText: z.string().trim().max(500).optional().nullable(),
   durationSeconds: z.number().int().positive().max(6 * 60 * 60),
-  publishedAt: z.string().datetime({ offset: true }).or(z.string().min(10)),
+  publishedAt: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    .refine((value) => Number.isFinite(Date.parse(value)), 'Enter a valid publish date.'),
   views: z.number().int().nonnegative(),
   likes: z.number().int().nonnegative().default(0),
   comments: z.number().int().nonnegative().default(0),

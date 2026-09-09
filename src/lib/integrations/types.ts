@@ -52,8 +52,10 @@ export interface PlatformIntegration {
   isConfigured(): boolean;
   /** Env vars this integration needs, for the setup screen. */
   requiredEnvVars: string[];
-  buildAuthorizationUrl(state: string, redirectUri: string): string;
-  exchangeCode(code: string, redirectUri: string): Promise<OAuthTokens>;
+  /** True when this platform requires PKCE (RFC 7636) on the authorize/token requests. */
+  usesPkce?: boolean;
+  buildAuthorizationUrl(state: string, redirectUri: string, codeChallenge?: string): string;
+  exchangeCode(code: string, redirectUri: string, codeVerifier?: string): Promise<OAuthTokens>;
   refresh(refreshToken: string): Promise<OAuthTokens>;
   fetchProfile(tokens: OAuthTokens): Promise<OAuthProfile>;
   fetchVideos(tokens: OAuthTokens, options: { limit?: number }): Promise<SyncResult>;

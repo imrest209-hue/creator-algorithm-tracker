@@ -99,7 +99,7 @@ export const IMPORT_FIELDS: FieldDefinition[] = [
     label: 'Duration (seconds)',
     required: true,
     type: 'duration',
-    aliases: ['duration', 'length', 'video length', 'duration (seconds)', 'video duration'],
+    aliases: ['duration', 'length', 'video length', 'duration (seconds)', 'video duration', 'duration seconds'],
     hint: 'Accepts seconds, or mm:ss / hh:mm:ss.',
   },
   {
@@ -107,7 +107,7 @@ export const IMPORT_FIELDS: FieldDefinition[] = [
     label: 'Published at',
     required: true,
     type: 'date',
-    aliases: ['video publish time', 'publish time', 'published', 'date', 'post time', 'create time', 'upload date'],
+    aliases: ['video publish time', 'publish time', 'published', 'date', 'post time', 'create time', 'upload date', 'published at'],
   },
   { key: 'views', label: 'Views', required: true, type: 'number', aliases: ['views', 'video views', 'play count', 'plays'] },
   { key: 'likes', label: 'Likes', required: false, type: 'number', aliases: ['likes', 'like count'] },
@@ -126,7 +126,7 @@ export const IMPORT_FIELDS: FieldDefinition[] = [
     label: 'Watch time (minutes)',
     required: false,
     type: 'number',
-    aliases: ['watch time (hours)', 'watch time (minutes)', 'watch time', 'total watch time'],
+    aliases: ['watch time (hours)', 'watch time (minutes)', 'watch time', 'total watch time', 'watch time minutes'],
     hint: 'A column named "watch time (hours)" is converted to minutes automatically.',
   },
   {
@@ -134,14 +134,14 @@ export const IMPORT_FIELDS: FieldDefinition[] = [
     label: 'Average view duration (seconds)',
     required: false,
     type: 'duration',
-    aliases: ['average view duration', 'avg view duration', 'average watch time', 'avg watch time'],
+    aliases: ['average view duration', 'avg view duration', 'average watch time', 'avg watch time', 'avg view duration seconds'],
   },
   {
     key: 'averagePercentageViewed',
     label: 'Average percentage viewed',
     required: false,
     type: 'number',
-    aliases: ['average percentage viewed', 'avg percentage viewed', 'retention', 'average view percentage', 'watched full video'],
+    aliases: ['average percentage viewed', 'avg percentage viewed', 'retention', 'average view percentage', 'watched full video', 'retention pct'],
   },
   { key: 'impressions', label: 'Impressions', required: false, type: 'number', aliases: ['impressions', 'shows'] },
   {
@@ -149,7 +149,7 @@ export const IMPORT_FIELDS: FieldDefinition[] = [
     label: 'Click-through rate (%)',
     required: false,
     type: 'number',
-    aliases: ['impressions click-through rate', 'impressions click-through rate (%)', 'ctr', 'click-through rate', 'click through rate'],
+    aliases: ['impressions click-through rate', 'impressions click-through rate (%)', 'ctr', 'click-through rate', 'click through rate', 'click through rate pct'],
   },
 ];
 

@@ -3,11 +3,11 @@ import { cookies } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db/prisma';
 import { twitchIntegration } from '@/lib/integrations/twitch';
-import { callbackUrl } from '@/lib/integrations/registry';
+import { callbackUrl, requestOrigin } from '@/lib/integrations/registry';
 import { oauthStateCookieName } from '@/lib/integrations/oauth-state';
 import { encryptSecret, safeEqual } from '@/lib/auth/crypto';
 import { ApiError } from '@/lib/integrations/http';
-import { upsertVideo } from '@/lib/videos/persist';
+import { importAccountVideos } from '@/lib/integrations/sync';
 import { logger } from '@/lib/util/logger';
 
 /**
@@ -17,9 +17,9 @@ import { logger } from '@/lib/util/logger';
  */
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.redirect(new URL('/login', request.url));
+  if (!user) return NextResponse.redirect(new URL('/login', requestOrigin(request)));
 
-  const settingsUrl = new URL('/settings', request.url);
+  const settingsUrl = new URL('/settings', requestOrigin(request));
 
   const error = request.nextUrl.searchParams.get('error');
   if (error) {
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const redirectUri = callbackUrl('TWITCH', request.nextUrl.origin);
+    const redirectUri = callbackUrl('TWITCH', requestOrigin(request));
     const tokens = await twitchIntegration.exchangeCode(code, redirectUri);
     const profile = await twitchIntegration.fetchProfile(tokens);
 
@@ -55,7 +55,6 @@ export async function GET(request: NextRequest) {
         scopes: tokens.scopes,
         status: 'CONNECTED',
         statusMessage: null,
-        lastSyncedAt: new Date(),
       },
       create: {
         userId: user.id,
@@ -70,37 +69,8 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const sync = await twitchIntegration.fetchVideos(tokens, { limit: 100 });
-    let imported = 0;
-    for (const video of sync.videos) {
-      await upsertVideo(
-        user.id,
-        {
-          platform: video.platform,
-          platformVideoId: video.platformVideoId,
-          title: video.title,
-          caption: video.caption,
-          description: video.description,
-          hashtags: video.hashtags,
-          durationSeconds: video.durationSeconds,
-          publishedAt: video.publishedAt,
-          views: video.metrics.views,
-          likes: video.metrics.likes,
-          comments: video.metrics.comments,
-          shares: video.metrics.shares,
-          saves: video.metrics.saves,
-          followersGained: video.metrics.followersGained,
-          watchTimeMinutes: video.metrics.watchTimeMinutes,
-          averageViewDurationSeconds: video.metrics.averageViewDurationSeconds,
-          averagePercentageViewed: video.metrics.averagePercentageViewed,
-          impressions: video.metrics.impressions,
-          clickThroughRate: video.metrics.clickThroughRate,
-        },
-        'TWITCH_API',
-        account.id,
-      );
-      imported += 1;
-    }
+    const sync = await importAccountVideos(account, twitchIntegration, tokens);
+    const imported = sync.imported;
 
     logger.info('twitch.connected', { userId: user.id, imported });
     settingsUrl.searchParams.set('connected', 'twitch');

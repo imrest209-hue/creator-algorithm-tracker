@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
-import { getIntegration, callbackUrl } from '@/lib/integrations/registry';
-import { oauthStateCookieName } from '@/lib/integrations/oauth-state';
-import { randomToken } from '@/lib/auth/crypto';
+import { getIntegration, callbackUrl, requestOrigin } from '@/lib/integrations/registry';
+import { oauthStateCookieName, pkceVerifierCookieName } from '@/lib/integrations/oauth-state';
+import { randomToken, pkceCodeChallenge } from '@/lib/auth/crypto';
 import type { Platform } from '@/lib/types';
 
 /**
@@ -14,7 +14,7 @@ import type { Platform } from '@/lib/types';
 export async function GET(request: NextRequest, { params }: { params: Promise<{ platform: string }> }) {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.redirect(new URL('/login', request.url));
+    return NextResponse.redirect(new URL('/login', requestOrigin(request)));
   }
 
   const { platform: platformParam } = await params;
@@ -46,7 +46,20 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     maxAge: 600,
   });
 
-  const redirectUri = callbackUrl(platform, request.nextUrl.origin);
-  const authorizationUrl = integration.buildAuthorizationUrl(state, redirectUri);
+  let codeChallenge: string | undefined;
+  if (integration.usesPkce) {
+    const codeVerifier = randomToken(32);
+    store.set(pkceVerifierCookieName(platformParam), codeVerifier, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 600,
+    });
+    codeChallenge = pkceCodeChallenge(codeVerifier);
+  }
+
+  const redirectUri = callbackUrl(platform, requestOrigin(request));
+  const authorizationUrl = integration.buildAuthorizationUrl(state, redirectUri, codeChallenge);
   return NextResponse.redirect(authorizationUrl);
 }

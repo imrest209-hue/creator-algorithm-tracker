@@ -25,19 +25,19 @@ export async function GET(request: NextRequest) {
   }
 
   const headers = [
-    'id', 'title', 'platform', 'category', 'hook_type', 'source', 'published_at', 'duration_seconds',
+    'video_id', 'title', 'platform', 'category', 'hook_type', 'source', 'published_at', 'duration_seconds',
     'hashtags', 'views', 'likes', 'comments', 'shares', 'saves', 'followers_gained', 'retention_pct',
     'avg_view_duration_seconds', 'watch_time_minutes', 'engagement_rate_pct', 'follower_conversion_pct',
     'click_through_rate_pct', 'views_per_hour', 'views_per_day', 'velocity_multiplier',
-    'performance_score', 'viral_potential_score', 'viral_confidence',
+    'performance_score', 'viral_potential_score', 'viral_confidence', 'performance_confidence',
   ];
 
   const csvRows = rows.map((r) => [
-    r.id, r.title, r.platform, r.categoryName, r.hookType, r.source, r.publishedAt, r.durationSeconds,
+    viewer.dataset.videos.find((v) => v.id === r.id)!.platformVideoId, r.title, r.platform, r.categoryName, r.hookType, r.source, r.publishedAt, r.durationSeconds,
     r.hashtags.join(' '), r.views, r.likes, r.comments, r.shares, r.saves, r.followersGained,
     r.retention, r.avgViewDurationSeconds, r.watchTimeMinutes, r.engagementRate, r.followerConversion,
-    r.clickThroughRate, r.viewsPerHour, r.viewsPerDay, r.velocityMultiplier, r.score, r.viralScore,
-    r.viralConfidence,
+    r.clickThroughRate, r.viewsPerHour, r.viewsPerDay, r.velocityMultiplier, r.scoreConfidence === 'NONE' ? null : r.score, r.viralConfidence === 'NONE' ? null : r.viralScore,
+    r.viralConfidence, r.scoreConfidence,
   ]);
 
   const csv = toCsv(headers, csvRows);

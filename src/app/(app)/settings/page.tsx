@@ -10,6 +10,7 @@ import { formatDateTime } from '@/lib/util/format';
 import { PageHeader } from '@/components/layout/Shell';
 import { Alert, Badge, Card, EmptyState, SectionHeading } from '@/components/ui/primitives';
 import { PlatformBadge } from '@/components/ui/metrics';
+import { SyncButton } from '@/components/settings/SyncButton';
 import { DisconnectButton } from '@/components/settings/DisconnectButton';
 import { NotificationToggle } from '@/components/settings/NotificationToggle';
 
@@ -55,7 +56,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
           <Link href="/register" className="link font-medium">
             Create an account
           </Link>{' '}
-          to connect YouTube or TikTok, import your own CSV data, and save settings.
+          to connect YouTube, TikTok or Twitch, import your own CSV data, and save settings.
         </Alert>
       ) : null}
 
@@ -70,7 +71,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
             PostgreSQL setup.
           </Alert>
         ) : viewer.dataset.connectedAccounts.length === 0 ? (
-          <EmptyState title="No accounts connected" description="Connect YouTube or TikTok below." />
+          <EmptyState title="No accounts connected" description="Connect YouTube, TikTok or Twitch below." />
         ) : (
           <ul className="space-y-2">
             {viewer.dataset.connectedAccounts.map((account) => (
@@ -86,10 +87,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
                       Connected {formatDateTime(account.connectedAt)}
                       {account.lastSyncedAt ? ' · last synced ' + formatDateTime(account.lastSyncedAt) : ''}
                     </p>
+                    {account.statusMessage ? (
+                      <p className="mt-1 max-w-xl text-xs text-warn">{account.statusMessage}</p>
+                    ) : null}
                   </div>
                   <Badge tone={account.status === 'CONNECTED' ? 'good' : 'bad'}>{account.status}</Badge>
                 </div>
-                <DisconnectButton accountId={account.id} />
+                <div className="flex flex-wrap items-center gap-2">
+                  {!viewer.isDemo ? <SyncButton accountId={account.id} /> : null}
+                  {!viewer.isDemo ? <DisconnectButton accountId={account.id} /> : null}
+                </div>
               </li>
             ))}
           </ul>
@@ -156,7 +163,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         </div>
         <p className="mt-2 text-xs text-ink-muted">
           Categories are assigned automatically from title, caption, description and hashtags, and
-          can be overridden per video from the video detail page.
+          can be supplied when importing a CSV.
         </p>
       </Card>
 

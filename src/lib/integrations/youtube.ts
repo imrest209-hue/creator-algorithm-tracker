@@ -17,7 +17,7 @@ import { logger } from '@/lib/util/logger';
  * Uses the official Google OAuth 2.0 flow plus two official APIs:
  *   * YouTube Data API v3       - video list, snippets, public statistics
  *   * YouTube Analytics API v2  - watch time, average view duration, retention,
- *                                 subscribers gained, impressions and CTR
+ *                                 subscribers gained and shares
  *
  * Quota notes (Data API v3 has a default 10,000 units/day):
  *   channels.list      = 1 unit
@@ -137,6 +137,7 @@ async function fetchAnalytics(
     'averageViewDuration',
     'averageViewPercentage',
     'subscribersGained',
+    'shares',
   ].join(',');
 
   // The Analytics API caps filters; page through in chunks of 200 video ids.
@@ -165,6 +166,7 @@ async function fetchAnalytics(
         const videoId = String(record.video ?? '');
         if (!videoId) continue;
         out.set(videoId, {
+          shares: numOrNull(record.shares) ?? 0,
           watchTimeMinutes: numOrNull(record.estimatedMinutesWatched),
           averageViewDurationSeconds: numOrNull(record.averageViewDuration),
           averagePercentageViewed: numOrNull(record.averageViewPercentage),
@@ -180,47 +182,8 @@ async function fetchAnalytics(
     }
   }
 
-  // Impressions/CTR live in a separate report and require the channel to have
-  // impression data; a failure here is non-fatal.
-  for (let i = 0; i < videoIds.length; i += 200) {
-    const chunk = videoIds.slice(i, i + 200);
-    const params = new URLSearchParams({
-      ids: 'channel==MINE',
-      startDate: '2005-01-01',
-      endDate: new Date().toISOString().slice(0, 10),
-      metrics: 'impressions,impressionsClickThroughRate',
-      dimensions: 'video',
-      filters: 'video==' + chunk.join(','),
-      maxResults: '200',
-    });
-    try {
-      const data = await fetchJson<AnalyticsResponse>(ANALYTICS_API + '?' + params.toString(), {
-        label: 'YouTube impressions report',
-        headers: authHeaders(tokens),
-      });
-      const headers = (data.columnHeaders ?? []).map((h) => h.name);
-      for (const row of data.rows ?? []) {
-        const record: Record<string, string | number> = {};
-        headers.forEach((name, index) => {
-          record[name] = row[index];
-        });
-        const videoId = String(record.video ?? '');
-        if (!videoId) continue;
-        out.set(videoId, {
-          ...(out.get(videoId) ?? {}),
-          impressions: numOrNull(record.impressions),
-          clickThroughRate: numOrNull(record.impressionsClickThroughRate),
-        });
-      }
-    } catch (error) {
-      warnings.push(
-        'Impressions and click-through rate are unavailable for this channel through the Analytics API.',
-      );
-      logger.warn('youtube.impressions_failed', { error });
-      break;
-    }
-  }
-
+  // Thumbnail impressions/CTR are not metrics in the Analytics v2 reports API.
+  // Import them from YouTube Studio CSV instead of issuing an unsupported report.
   return out;
 }
 
@@ -397,9 +360,14 @@ export const youtubeIntegration: PlatformIntegration = {
       videos,
       unavailableMetrics: [
         {
-          metric: 'shares',
+          metric: 'impressions',
           reason:
-            'The YouTube Data API does not expose a per-video share count. Shares are recorded as 0 and can be entered manually.',
+            'Thumbnail impressions and CTR are not provided by this integration. Import them from YouTube Studio CSV.',
+        },
+        {
+          metric: 'clickThroughRate',
+          reason:
+            'Thumbnail impressions and CTR are not provided by this integration. Import them from YouTube Studio CSV.',
         },
         {
           metric: 'saves',
@@ -413,8 +381,8 @@ export const youtubeIntegration: PlatformIntegration = {
 
   limitations: [
     'Requires a Google Cloud project with the YouTube Data API v3 and YouTube Analytics API enabled.',
-    'Retention, watch time, subscribers gained, impressions and CTR come from the YouTube Analytics API and are only available for channels you own.',
-    'Per-video share counts are not exposed by the API and are recorded as 0 until entered manually.',
+    'Retention, watch time, subscribers gained and shares come from the YouTube Analytics API and are only available for channels you own.',
+    'Import thumbnail impressions and CTR from YouTube Studio CSV; they are not available through this integration.',
     'The Data API has a default quota of 10,000 units per day; a full sync of 500 videos costs about 25 units.',
     'Shorts are detected by duration (3 minutes or less) because the API has no explicit Shorts flag.',
   ],

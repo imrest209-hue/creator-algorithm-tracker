@@ -27,7 +27,13 @@ const TOKEN_ENDPOINT = 'https://open.tiktokapis.com/v2/oauth/token/';
 const USER_INFO_ENDPOINT = 'https://open.tiktokapis.com/v2/user/info/';
 const VIDEO_LIST_ENDPOINT = 'https://open.tiktokapis.com/v2/video/list/';
 
-export const TIKTOK_SCOPES = ['user.info.basic', 'user.info.profile', 'video.list'];
+// Must exactly match the scopes actually added to the TikTok app/sandbox in
+// the developer portal - requesting a scope the app doesn't have registered
+// is rejected with an authorize-time "scope" error. `user.info.profile`
+// (which would add the @username) isn't registered; fetchProfile() already
+// falls back to display_name when username is absent, so this degrades
+// honestly rather than needing that extra scope.
+export const TIKTOK_SCOPES = ['user.info.basic', 'video.list'];
 
 export const TIKTOK_UNAVAILABLE_MESSAGE =
   'Unavailable through current TikTok API permissions.';
@@ -129,20 +135,29 @@ export const tiktokIntegration: PlatformIntegration = {
     return Boolean(env('TIKTOK_CLIENT_KEY') && env('TIKTOK_CLIENT_SECRET'));
   },
 
-  buildAuthorizationUrl(state, redirectUri) {
+  // TikTok's v2 authorize/token endpoints require PKCE (RFC 7636) - a plain
+  // client_id/secret + state exchange is rejected with a "code_challenge"
+  // validation error.
+  usesPkce: true,
+
+  buildAuthorizationUrl(state, redirectUri, codeChallenge) {
     const clientKey = env('TIKTOK_CLIENT_KEY');
     if (!clientKey) throw new Error('TIKTOK_CLIENT_KEY is not configured.');
+    if (!codeChallenge) throw new Error('TikTok requires a PKCE code_challenge.');
     const params = new URLSearchParams({
       client_key: clientKey,
       response_type: 'code',
       scope: TIKTOK_SCOPES.join(','),
       redirect_uri: redirectUri,
       state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
     return AUTH_ENDPOINT + '?' + params.toString();
   },
 
-  async exchangeCode(code, redirectUri) {
+  async exchangeCode(code, redirectUri, codeVerifier) {
+    if (!codeVerifier) throw new Error('TikTok requires the PKCE code_verifier to exchange a code.');
     return requestTokens(
       new URLSearchParams({
         client_key: env('TIKTOK_CLIENT_KEY') ?? '',
@@ -150,6 +165,7 @@ export const tiktokIntegration: PlatformIntegration = {
         code,
         grant_type: 'authorization_code',
         redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
       }),
     );
   },
@@ -167,8 +183,12 @@ export const tiktokIntegration: PlatformIntegration = {
   },
 
   async fetchProfile(tokens): Promise<OAuthProfile> {
+    // `username` requires the user.info.profile scope, which isn't registered
+    // on this app (see TIKTOK_SCOPES) - requesting it anyway makes TikTok
+    // reject the whole call with scope_not_authorized, not just omit the
+    // field. open_id/display_name are covered by user.info.basic.
     const data = await fetchJson<UserInfoResponse>(
-      USER_INFO_ENDPOINT + '?fields=open_id,display_name,username',
+      USER_INFO_ENDPOINT + '?fields=open_id,display_name',
       { label: 'TikTok user info', headers: { Authorization: 'Bearer ' + tokens.accessToken } },
     );
     assertNoApiError(data.error, 'TikTok user info');

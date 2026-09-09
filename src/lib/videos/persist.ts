@@ -14,10 +14,11 @@ import type { ManualVideoInput } from '@/lib/videos/schema';
  */
 export async function upsertVideo(
   userId: string,
-  input: ManualVideoInput,
+  input: ManualVideoInput & { thumbnailUrl?: string | null },
   source: DataSource,
   connectedAccountId?: string | null,
 ): Promise<{ id: string; created: boolean }> {
+  return prisma.$transaction(async (tx) => {
   const classification = input.categoryName
     ? { slug: input.categorySlug ?? slugify(input.categoryName), name: input.categoryName }
     : classifyCategory(
@@ -30,7 +31,7 @@ export async function upsertVideo(
         DEFAULT_CATEGORIES,
       );
 
-  const category = await prisma.contentCategory.upsert({
+  const category = await tx.contentCategory.upsert({
     where: { userId_slug: { userId, slug: classification.slug } },
     update: {},
     create: {
@@ -41,7 +42,7 @@ export async function upsertVideo(
     },
   });
 
-  const existing = await prisma.video.findUnique({
+  const existing = await tx.video.findUnique({
     where: {
       userId_platform_platformVideoId: {
         userId,
@@ -53,7 +54,7 @@ export async function upsertVideo(
 
   const publishedAt = new Date(input.publishedAt);
 
-  const video = await prisma.video.upsert({
+  const video = await tx.video.upsert({
     where: {
       userId_platform_platformVideoId: {
         userId,
@@ -70,6 +71,7 @@ export async function upsertVideo(
       durationSeconds: input.durationSeconds,
       publishedAt,
       source,
+      thumbnailUrl: input.thumbnailUrl ?? undefined,
       connectedAccountId: connectedAccountId ?? undefined,
     },
     create: {
@@ -84,11 +86,12 @@ export async function upsertVideo(
       durationSeconds: input.durationSeconds,
       publishedAt,
       source,
+      thumbnailUrl: input.thumbnailUrl ?? null,
       connectedAccountId: connectedAccountId ?? undefined,
     },
   });
 
-  await prisma.videoMetric.create({
+  await tx.videoMetric.create({
     data: {
       videoId: video.id,
       views: BigInt(input.views),
@@ -111,28 +114,23 @@ export async function upsertVideo(
 
   if (input.hookText && input.hookText.trim().length > 0) {
     const hookText = input.hookText.trim();
-    await prisma.hook.upsert({
+    await tx.hook.upsert({
       where: { videoId: video.id },
       update: { text: hookText, type: classifyHook(hookText), isAuto: true },
       create: { videoId: video.id, text: hookText, type: classifyHook(hookText), isAuto: true },
     });
   }
 
-  if (input.hashtags.length > 0) {
-    await prisma.videoHashtag.deleteMany({ where: { videoId: video.id } });
-    for (const raw of input.hashtags) {
-      const tag = normaliseHashtag(raw);
-      if (!tag) continue;
-      const hashtag = await prisma.hashtag.upsert({
+  await tx.videoHashtag.deleteMany({ where: { videoId: video.id } });
+  for (const tag of new Set(input.hashtags.map(normaliseHashtag).filter(Boolean))) {
+      const hashtag = await tx.hashtag.upsert({
         where: { tag },
         update: {},
         create: { tag },
       });
-      await prisma.videoHashtag
-        .create({ data: { videoId: video.id, hashtagId: hashtag.id } })
-        .catch(() => undefined); // ignore races on the composite PK
-    }
+      await tx.videoHashtag.create({ data: { videoId: video.id, hashtagId: hashtag.id } });
   }
 
   return { id: video.id, created: !existing };
+  });
 }

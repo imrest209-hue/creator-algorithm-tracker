@@ -111,7 +111,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
                 label="Total shares"
                 value={formatCompact(summary.totalShares.value)}
                 delta={summary.totalShares.delta}
-                hint="YouTube does not expose a per-video share count; those videos contribute 0."
+                hint="Shares reported by connected platforms or imported data. Some APIs do not provide this count."
               />
               <StatCard
                 label="Videos posted"

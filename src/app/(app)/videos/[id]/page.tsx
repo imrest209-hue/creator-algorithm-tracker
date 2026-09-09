@@ -315,7 +315,7 @@ export default async function VideoDetailPage({
               {
                 label: 'Shares',
                 value: formatNumber(video.metrics.shares),
-                note: video.platform === 'YOUTUBE' ? 'YouTube does not expose share counts via API.' : undefined,
+                note: video.source === 'TWITCH_API' ? 'The Twitch API does not provide share counts.' : undefined,
               },
               {
                 label: 'Saves / favourites',

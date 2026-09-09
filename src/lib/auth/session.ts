@@ -32,7 +32,9 @@ export const credentialsSchema = z.object({
 
 export const registerSchema = credentialsSchema.extend({
   displayName: z.string().trim().min(1, 'Enter a display name.').max(80),
-  timezone: z.string().trim().min(1).max(64).default('UTC'),
+  timezone: z.string().trim().min(1).max(64).refine((value) => {
+    try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
+  }, 'Enter a valid timezone.').default('UTC'),
 });
 
 export interface SessionUser {

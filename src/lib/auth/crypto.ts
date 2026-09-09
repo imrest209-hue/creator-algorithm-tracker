@@ -87,3 +87,13 @@ export function safeEqual(a: string, b: string): boolean {
   if (bufA.length !== bufB.length) return false;
   return crypto.timingSafeEqual(bufA, bufB);
 }
+
+/**
+ * PKCE (RFC 7636) code_challenge derived from a code_verifier via S256.
+ * `randomToken()` already produces a base64url string in the 43-128 char
+ * range that only uses unreserved characters, so it doubles as a valid
+ * code_verifier - generate one with randomToken() and pass it here.
+ */
+export function pkceCodeChallenge(codeVerifier: string): string {
+  return crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+}

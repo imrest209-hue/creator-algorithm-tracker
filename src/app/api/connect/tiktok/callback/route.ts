@@ -3,11 +3,11 @@ import { cookies } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db/prisma';
 import { tiktokIntegration } from '@/lib/integrations/tiktok';
-import { callbackUrl } from '@/lib/integrations/registry';
-import { oauthStateCookieName } from '@/lib/integrations/oauth-state';
+import { callbackUrl, requestOrigin } from '@/lib/integrations/registry';
+import { oauthStateCookieName, pkceVerifierCookieName } from '@/lib/integrations/oauth-state';
 import { encryptSecret, safeEqual } from '@/lib/auth/crypto';
 import { ApiError } from '@/lib/integrations/http';
-import { upsertVideo } from '@/lib/videos/persist';
+import { importAccountVideos } from '@/lib/integrations/sync';
 import { logger } from '@/lib/util/logger';
 
 /**
@@ -18,9 +18,9 @@ import { logger } from '@/lib/util/logger';
  */
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.redirect(new URL('/login', request.url));
+  if (!user) return NextResponse.redirect(new URL('/login', requestOrigin(request)));
 
-  const settingsUrl = new URL('/settings', request.url);
+  const settingsUrl = new URL('/settings', requestOrigin(request));
 
   const error = request.nextUrl.searchParams.get('error');
   if (error) {
@@ -32,16 +32,18 @@ export async function GET(request: NextRequest) {
   const state = request.nextUrl.searchParams.get('state');
   const store = await cookies();
   const expectedState = store.get(oauthStateCookieName('tiktok'))?.value;
+  const codeVerifier = store.get(pkceVerifierCookieName('tiktok'))?.value;
   store.delete(oauthStateCookieName('tiktok'));
+  store.delete(pkceVerifierCookieName('tiktok'));
 
-  if (!code || !state || !expectedState || !safeEqual(state, expectedState)) {
+  if (!code || !state || !expectedState || !safeEqual(state, expectedState) || !codeVerifier) {
     settingsUrl.searchParams.set('error', 'Invalid or expired authorization request. Try connecting again.');
     return NextResponse.redirect(settingsUrl);
   }
 
   try {
-    const redirectUri = callbackUrl('TIKTOK', request.nextUrl.origin);
-    const tokens = await tiktokIntegration.exchangeCode(code, redirectUri);
+    const redirectUri = callbackUrl('TIKTOK', requestOrigin(request));
+    const tokens = await tiktokIntegration.exchangeCode(code, redirectUri, codeVerifier);
     const profile = await tiktokIntegration.fetchProfile(tokens);
 
     const account = await prisma.connectedAccount.upsert({
@@ -56,7 +58,6 @@ export async function GET(request: NextRequest) {
         scopes: tokens.scopes,
         status: 'CONNECTED',
         statusMessage: null,
-        lastSyncedAt: new Date(),
       },
       create: {
         userId: user.id,
@@ -71,37 +72,8 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const sync = await tiktokIntegration.fetchVideos(tokens, { limit: 100 });
-    let imported = 0;
-    for (const video of sync.videos) {
-      await upsertVideo(
-        user.id,
-        {
-          platform: video.platform,
-          platformVideoId: video.platformVideoId,
-          title: video.title,
-          caption: video.caption,
-          description: video.description,
-          hashtags: video.hashtags,
-          durationSeconds: video.durationSeconds,
-          publishedAt: video.publishedAt,
-          views: video.metrics.views,
-          likes: video.metrics.likes,
-          comments: video.metrics.comments,
-          shares: video.metrics.shares,
-          saves: video.metrics.saves,
-          followersGained: video.metrics.followersGained,
-          watchTimeMinutes: video.metrics.watchTimeMinutes,
-          averageViewDurationSeconds: video.metrics.averageViewDurationSeconds,
-          averagePercentageViewed: video.metrics.averagePercentageViewed,
-          impressions: video.metrics.impressions,
-          clickThroughRate: video.metrics.clickThroughRate,
-        },
-        'TIKTOK_API',
-        account.id,
-      );
-      imported += 1;
-    }
+    const sync = await importAccountVideos(account, tiktokIntegration, tokens);
+    const imported = sync.imported;
 
     logger.info('tiktok.connected', { userId: user.id, imported });
     settingsUrl.searchParams.set('connected', 'tiktok');

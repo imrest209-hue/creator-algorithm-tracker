@@ -153,6 +153,26 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
+### Windows desktop shortcut
+
+Run once from the project folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-shortcut.ps1
+```
+
+Double-click **Creator Algorithm Tracker** on your Desktop. The launcher
+starts the local dev server when needed and opens an Edge/Chrome app window.
+It also starts the existing self-owned PostgreSQL 17 cluster on port 5433
+when this machine's configured local cluster is stopped. It never creates
+or resets a database. Startup errors are shown and logged under `.runtime/`.
+The processes remain running after the window closes; the shortcut starts
+them again after a reboot. Node.js and Edge or Chrome must be installed.
+
+Development output uses `.next-dev` and production uses `.next`. On Windows,
+stop the dev server before `npm run build` so Prisma can replace its locked
+engine DLL.
+
 ## 9. Run in production
 
 ```bash
@@ -233,10 +253,10 @@ only how its early numbers compare to your past videos.
 
 **YouTube** (Data API v3 + Analytics API v2):
 - Retention, watch time, average view duration, subscribers gained,
-  impressions and CTR require the Analytics API and are only available for
-  channels you own.
-- Per-video **share count is not exposed by the API at all** — stored as 0,
-  can be added manually.
+  and share counts require the Analytics API and are only available for
+  channels you own. See the [official metrics reference](https://developers.google.com/youtube/analytics/metrics).
+- Thumbnail impressions and CTR are not imported by this integration. Add
+  them using a YouTube Studio CSV export.
 - Shorts are inferred from duration (≤180s); there's no explicit API flag.
 - Default quota: 10,000 units/day. A 500-video sync costs roughly 25 units.
 
@@ -323,3 +343,25 @@ tests/                       Vitest suite
   integration can be added the same way YouTube/TikTok were).
 - No automated notification delivery (email/push) — notifications are
   computed on page load; a scheduled job could push them instead.
+
+### Refreshing connected accounts
+
+Use **Settings → Connected accounts → Sync now** to update up to 500 videos
+per connection without going through OAuth again. Expiring access tokens are
+refreshed automatically when a refresh token is available. The last-sync
+time changes only after all returned videos are saved; failed syncs retain
+the previous success time and can be retried. Each video is saved atomically.
+
+TikTok Sandbox reconnects require a public HTTPS callback. A Cloudflare quick
+tunnel can provide one, but its URL changes when restarted: update the
+Sandbox redirect URI and open/sign in to the app through that tunnel before
+connecting TikTok. Routine **Sync now** works on localhost without a tunnel.
+
+Velocity milestones are only available when measured snapshots exist.
+The current live sync stores current metric captures but does not schedule
+early-life milestone collection; historical milestones cannot be recovered
+from lifetime counts.
+
+Legacy likes/comments/shares columns are non-nullable and use zero when a
+source cannot supply a count. Other unavailable metrics use null. Take this
+limitation into account when comparing platforms with different API coverage.
